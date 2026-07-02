@@ -1,6 +1,5 @@
 export const PING_QUERY = /* GraphQL */ `
   query UnraidMcpPing {
-    online
     info {
       os {
         platform
@@ -9,9 +8,13 @@ export const PING_QUERY = /* GraphQL */ `
         uptime
       }
       versions {
-        unraid
-        api
-        docker
+        core {
+          unraid
+          api
+        }
+        packages {
+          docker
+        }
       }
     }
   }
@@ -19,7 +22,6 @@ export const PING_QUERY = /* GraphQL */ `
 
 export const SYSTEM_HEALTH_QUERY = /* GraphQL */ `
   query UnraidMcpSystemHealth($includeSmart: Boolean!) {
-    online
     info {
       os {
         platform
@@ -33,10 +35,15 @@ export const SYSTEM_HEALTH_QUERY = /* GraphQL */ `
         threads
       }
       versions {
-        unraid
-        api
-        docker
-        node
+        core {
+          unraid
+          api
+          kernel
+        }
+        packages {
+          docker
+          node
+        }
       }
     }
     array {
@@ -54,9 +61,13 @@ export const SYSTEM_HEALTH_QUERY = /* GraphQL */ `
         }
       }
       parityCheckStatus {
+        date
+        duration
+        speed
         status
         progress
         errors
+        correcting
         running
         paused
       }
@@ -121,8 +132,8 @@ export const LIST_CONTAINERS_QUERY = /* GraphQL */ `
         projectUrl
       }
       containerUpdateStatuses {
-        id
-        status
+        name
+        updateStatus
       }
     }
   }
