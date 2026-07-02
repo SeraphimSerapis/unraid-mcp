@@ -95,6 +95,31 @@ npm run test
 npm run check
 ```
 
+Install the tracked local Git hooks once per clone so pushes run checks before GitHub Actions spends minutes:
+
+```bash
+npm run hooks:install
+```
+
+The pre-push hook runs `npm run check && npm run build`.
+
+## Container Images
+
+GitHub Actions builds Docker images for pull requests and publishes to GHCR on pushes to `main` and tags matching `v*`.
+
+Published image:
+
+```text
+ghcr.io/seraphimserapis/unraid-mcp
+```
+
+Tagging policy:
+
+- `main` for pushes to the default branch
+- `pr-<number>` for pull request build validation, not pushed
+- `1.2.3`, `1.2`, and `1` for Git release tags like `v1.2.3`
+- `sha-<commit>` for immutable commit references
+
 ## Known API Boundaries
 
 Docker update support is present in current Unraid API schemas via `docker.updateContainer`, `docker.updateContainers`, and `docker.updateAllContainers`.
