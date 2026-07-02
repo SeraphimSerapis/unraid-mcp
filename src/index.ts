@@ -11,27 +11,32 @@ import type { Request, Response } from "express";
 import { loadConfig } from "./config.js";
 import { UnraidClient } from "./graphql/client.js";
 import { CapabilityService } from "./graphql/capabilities.js";
+import { PING_QUERY } from "./graphql/operations.js";
 import { buildMcpServer } from "./mcp/server.js";
+import { isAuthorizedBearer } from "./mcp/security.js";
 
 loadDotenv();
 
 const appConfig = loadConfig();
 
+const client = new UnraidClient({
+  allowInsecureTls: appConfig.unraid.allowInsecureTls,
+  apiKey: appConfig.unraid.apiKey,
+  endpoint: appConfig.unraid.endpoint,
+  maxConcurrency: appConfig.unraid.maxConcurrency,
+  requestTimeoutMs: appConfig.unraid.requestTimeoutMs,
+});
+
+const capabilities = new CapabilityService(client, appConfig.unraid.schemaCacheTtlMs);
+
 function makeServer() {
-  const client = new UnraidClient({
-    apiKey: appConfig.unraid.apiKey,
-    endpoint: appConfig.unraid.endpoint,
-    maxConcurrency: appConfig.unraid.maxConcurrency,
-    requestTimeoutMs: appConfig.unraid.requestTimeoutMs,
-  });
-
-  const capabilities = new CapabilityService(client, appConfig.unraid.schemaCacheTtlMs);
-
   return buildMcpServer({
     allowRawGraphql: appConfig.unraid.allowRawGraphql,
     capabilities,
     client,
     defaultToolsets: appConfig.unraid.defaultToolsets,
+    enableMutations: appConfig.unraid.enableMutations,
+    pluginHostAllowlist: appConfig.unraid.pluginHostAllowlist,
   });
 }
 
@@ -43,45 +48,142 @@ async function serveStdio() {
 
 function serveHttp() {
   const app = createMcpExpressApp();
-  const transports = new Map<string, StreamableHTTPServerTransport>();
-  const servers = new Map<string, ReturnType<typeof makeServer>>();
+  const sessions = new Map<
+    string,
+    {
+      lastSeen: number;
+      server: ReturnType<typeof makeServer>;
+      transport: StreamableHTTPServerTransport;
+    }
+  >();
+
+  const disposeSession = (sessionId: string, closeTransport: boolean) => {
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+
+    sessions.delete(sessionId);
+    if (closeTransport) {
+      void session.transport.close().catch(() => undefined);
+    }
+    void session.server.close().catch(() => undefined);
+  };
+
+  const reapIdleSessions = setInterval(
+    () => {
+      const now = Date.now();
+      for (const [sessionId, session] of sessions) {
+        if (now - session.lastSeen > appConfig.http.sessionIdleTimeoutMs) {
+          disposeSession(sessionId, true);
+        }
+      }
+    },
+    Math.min(appConfig.http.sessionIdleTimeoutMs, 60_000),
+  );
+  reapIdleSessions.unref();
 
   app.get("/healthz", (_req, res) => {
     res.status(200).json({ ok: true });
   });
 
-  app.post(appConfig.http.path, async (req: Request, res: Response) => {
+  app.get("/readyz", async (req, res) => {
+    if (!appConfig.unraid.endpoint || !appConfig.unraid.apiKey) {
+      res.status(503).json({ ok: false, reason: "Unraid endpoint or API key is not configured." });
+      return;
+    }
+
+    const deepQuery = req.query.deep;
+    const deep = deepQuery === "true" || deepQuery === "1";
+    if (!deep) {
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    try {
+      await client.query(PING_QUERY);
+      res.status(200).json({ ok: true });
+    } catch (error) {
+      res.status(503).json({
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.all(appConfig.http.path, async (req: Request, res: Response) => {
+    if (!["DELETE", "GET", "POST"].includes(req.method)) {
+      res.status(405).json({
+        error: { code: -32000, message: "Method not allowed." },
+        id: null,
+        jsonrpc: "2.0",
+      });
+      return;
+    }
+
+    if (
+      !appConfig.http.allowUnauthenticated &&
+      !isAuthorizedBearer(req.headers.authorization, appConfig.http.bearerToken)
+    ) {
+      res.setHeader("www-authenticate", "Bearer");
+      res.status(401).json({
+        error: { code: -32001, message: "Unauthorized" },
+        id: null,
+        jsonrpc: "2.0",
+      });
+      return;
+    }
+
     const sessionId = req.headers["mcp-session-id"];
+    let createdServer: ReturnType<typeof makeServer> | undefined;
+    let createdTransport: StreamableHTTPServerTransport | undefined;
 
     try {
       let transport: StreamableHTTPServerTransport | undefined;
 
       if (typeof sessionId === "string") {
-        transport = transports.get(sessionId);
+        const session = sessions.get(sessionId);
+        if (session) {
+          session.lastSeen = Date.now();
+          transport = session.transport;
+        }
       } else if (isInitializeRequest(req.body)) {
+        if (sessions.size >= appConfig.http.maxSessions) {
+          res.status(503).json({
+            error: {
+              code: -32000,
+              message: "Too many active MCP sessions.",
+            },
+            id: null,
+            jsonrpc: "2.0",
+          });
+          return;
+        }
+
+        const server = makeServer();
         transport = new StreamableHTTPServerTransport({
           onsessioninitialized: (newSessionId) => {
-            transports.set(newSessionId, transport!);
+            sessions.set(newSessionId, {
+              lastSeen: Date.now(),
+              server,
+              transport: transport!,
+            });
           },
           sessionIdGenerator: () => randomUUID(),
         });
+        createdServer = server;
+        createdTransport = transport;
 
         transport.onclose = () => {
           const closedSessionId = transport?.sessionId;
           if (closedSessionId) {
-            transports.delete(closedSessionId);
-            void servers.get(closedSessionId)?.close();
-            servers.delete(closedSessionId);
+            disposeSession(closedSessionId, false);
+          } else {
+            void server.close().catch(() => undefined);
           }
         };
 
-        const server = makeServer();
         await server.connect(transport as unknown as Transport);
-
-        const newSessionId = transport.sessionId;
-        if (newSessionId) {
-          servers.set(newSessionId, server);
-        }
       }
 
       if (!transport) {
@@ -98,6 +200,10 @@ function serveHttp() {
 
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
+      if (!createdTransport?.sessionId) {
+        void createdServer?.close().catch(() => undefined);
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       if (!res.headersSent) {
         res.status(500).json({
@@ -110,22 +216,6 @@ function serveHttp() {
         });
       }
     }
-  });
-
-  app.get(appConfig.http.path, (_req, res) => {
-    res.status(405).json({
-      error: { code: -32000, message: "Method not allowed." },
-      id: null,
-      jsonrpc: "2.0",
-    });
-  });
-
-  app.delete(appConfig.http.path, (_req, res) => {
-    res.status(405).json({
-      error: { code: -32000, message: "Method not allowed." },
-      id: null,
-      jsonrpc: "2.0",
-    });
   });
 
   app.listen(appConfig.http.port, appConfig.http.host, () => {

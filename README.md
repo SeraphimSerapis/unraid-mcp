@@ -12,7 +12,8 @@ The server is intentionally capability-aware: it inspects the GraphQL schema, ke
 - System, array, parity, and conservative disk health queries.
 - Plugin inventory and native plugin install support.
 - Honest plugin update handling: current public schemas expose plugin install, but not a native plugin update mutation.
-- Dry-run defaults and explicit confirmation for mutating tools.
+- Bearer-token auth for HTTP transport.
+- Mutations disabled by default, with dry-run defaults and explicit confirmation when enabled.
 - TypeScript, Vitest, ESLint, Prettier, Dockerfile, and CI-ready scripts.
 
 ## Requirements
@@ -36,8 +37,9 @@ For Docker:
 
 ```bash
 docker build -t unraid-mcp:local .
-docker run --rm -p 3000:3000 \
+docker run --rm -p 127.0.0.1:3000:3000 \
   -e MCP_TRANSPORT=http \
+  -e MCP_HTTP_BEARER_TOKEN=change-this-random-token \
   -e UNRAID_URL=https://tower.local/graphql \
   -e UNRAID_API_KEY=your-key \
   unraid-mcp:local
@@ -46,6 +48,8 @@ docker run --rm -p 3000:3000 \
 MCP endpoint: `http://localhost:3000/mcp`
 
 Health endpoint: `http://localhost:3000/healthz`
+
+Readiness endpoint: `http://localhost:3000/readyz`
 
 ## Toolsets
 
@@ -63,13 +67,24 @@ Optional toolsets:
 
 Use `unraid_toolset` with `action=enable` and `name=docker` or `name=plugins` when you need more tools. The MCP SDK emits tool-list change notifications after enable/disable.
 
+Large list tools return concise text plus structured data, and accept `limit` inputs so an MCP client does not have to ingest every container or plugin at once.
+
 ## Security
 
 - Store `UNRAID_API_KEY` in environment/secrets, never in git.
+- HTTP transport requires `MCP_HTTP_BEARER_TOKEN` unless `MCP_HTTP_ALLOW_UNAUTHENTICATED=true` is set explicitly for a local test harness.
+- Bind published Docker ports to localhost, Tailscale, or a trusted reverse proxy. The compose example uses `127.0.0.1:3000:3000` on purpose.
 - Prefer scoped API permissions such as `DOCKER:READ_ANY`, `DOCKER:UPDATE_ANY`, `ARRAY:READ_ANY`, `DISK:READ_ANY`, and `INFO:READ_ANY` instead of admin when possible.
-- Mutating tools default to `dryRun=true` and require `confirm=true`.
+- Mutating tools require `UNRAID_ENABLE_MUTATIONS=true`, default to `dryRun=true`, and require `confirm=true`.
+- Plugin installs only accept `https` `.plg` URLs without embedded credentials. Set `UNRAID_PLUGIN_HOST_ALLOWLIST` to restrict install sources further.
 - `UNRAID_ENABLE_RAW_GRAPHQL=false` by default because raw GraphQL gives callers arbitrary API reach.
 - `UNRAID_ALLOW_INSECURE_TLS=false` by default. Only enable it for lab systems with self-signed certificates you explicitly trust.
+
+Clients must send the token as:
+
+```http
+Authorization: Bearer change-this-random-token
+```
 
 ## Development
 

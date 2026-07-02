@@ -5,8 +5,8 @@ export function textResult(text: string, structuredContent?: Record<string, unkn
   };
 }
 
-export function jsonResult(title: string, value: unknown) {
-  return textResult(`${title}\n\n${JSON.stringify(value, null, 2)}`, {
+export function jsonResult(title: string, value: unknown, summary = "Structured result attached.") {
+  return textResult(`${title}: ${summary}`, {
     result: value as Record<string, unknown>,
   });
 }

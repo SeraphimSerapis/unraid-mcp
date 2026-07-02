@@ -1,3 +1,5 @@
+import { Agent, fetch as undiciFetch, type Dispatcher } from "undici";
+
 import { ConfigurationError, GraphqlRequestError } from "./errors.js";
 
 type Fetch = typeof fetch;
@@ -6,6 +8,7 @@ export interface UnraidClientOptions {
   apiKey?: string | undefined;
   endpoint?: URL | undefined;
   fetchImpl?: Fetch;
+  allowInsecureTls?: boolean;
   maxConcurrency?: number;
   requestTimeoutMs?: number;
 }
@@ -48,11 +51,19 @@ class Semaphore {
 
 export class UnraidClient {
   private readonly fetchImpl: Fetch;
+  private readonly dispatcher: Dispatcher | undefined;
   private readonly semaphore: Semaphore;
   private readonly timeoutMs: number;
 
   constructor(private readonly options: UnraidClientOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.dispatcher = options.allowInsecureTls
+      ? new Agent({
+          connect: {
+            rejectUnauthorized: false,
+          },
+        })
+      : undefined;
     this.timeoutMs = options.requestTimeoutMs ?? 10_000;
     this.semaphore = new Semaphore(options.maxConcurrency ?? 4);
   }
@@ -67,7 +78,7 @@ export class UnraidClient {
     }
 
     return this.semaphore.run(async () => {
-      const response = await this.fetchImpl(this.options.endpoint!.toString(), {
+      const requestInit = {
         body: JSON.stringify({ query, variables }),
         headers: {
           "content-type": "application/json",
@@ -75,7 +86,14 @@ export class UnraidClient {
         },
         method: "POST",
         signal: AbortSignal.timeout(this.timeoutMs),
-      });
+      };
+
+      const response = this.dispatcher
+        ? await undiciFetch(this.options.endpoint!.toString(), {
+            ...requestInit,
+            dispatcher: this.dispatcher,
+          })
+        : await this.fetchImpl(this.options.endpoint!.toString(), requestInit);
 
       const text = await response.text();
       let envelope: GraphqlEnvelope<T>;

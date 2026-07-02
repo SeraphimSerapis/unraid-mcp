@@ -13,6 +13,7 @@ import {
   UPDATE_CONTAINER_MUTATION,
 } from "../graphql/operations.js";
 import { jsonResult, summarizeError, textResult } from "./result.js";
+import { looksLikeGraphqlMutation, validatePluginInstallUrl } from "./security.js";
 import { ToolsetRegistry, type ToolsetName } from "./toolsets.js";
 
 interface BuildServerOptions {
@@ -20,9 +21,12 @@ interface BuildServerOptions {
   capabilities: CapabilityService;
   client: UnraidClient;
   defaultToolsets: string[];
+  enableMutations: boolean;
+  pluginHostAllowlist: string[];
 }
 
 const ToolsetNameSchema = z.enum(["health", "docker", "plugins"]);
+const LimitSchema = z.number().int().min(1).max(200).default(50);
 
 export function buildMcpServer(options: BuildServerOptions) {
   const server = new McpServer(
@@ -145,17 +149,50 @@ function registerHealthTools(
           .boolean()
           .default(false)
           .describe("Include SMART details from Query.disks. May wake disks on some systems."),
+        limitDisks: LimitSchema.describe("Maximum disks to return per disk section."),
       },
       annotations: {
         readOnlyHint: true,
         openWorldHint: true,
       },
     },
-    async ({ includeSmart }) =>
-      jsonResult(
+    async ({ includeSmart, limitDisks }) => {
+      const data = await options.client.query<{
+        array: {
+          caches: unknown[];
+          disks: unknown[];
+          parities: unknown[];
+        };
+        disks?: unknown[];
+      }>(SYSTEM_HEALTH_QUERY, { includeSmart });
+
+      const payload = {
+        ...data,
+        array: {
+          ...data.array,
+          caches: data.array.caches.slice(0, limitDisks),
+          disks: data.array.disks.slice(0, limitDisks),
+          parities: data.array.parities.slice(0, limitDisks),
+        },
+        ...(data.disks ? { disks: data.disks.slice(0, limitDisks) } : {}),
+        summary: {
+          arrayCachesReturned: Math.min(data.array.caches.length, limitDisks),
+          arrayDisksReturned: Math.min(data.array.disks.length, limitDisks),
+          arrayParitiesReturned: Math.min(data.array.parities.length, limitDisks),
+          smartDisksReturned: data.disks ? Math.min(data.disks.length, limitDisks) : 0,
+          totalArrayCaches: data.array.caches.length,
+          totalArrayDisks: data.array.disks.length,
+          totalArrayParities: data.array.parities.length,
+          totalSmartDisks: data.disks?.length ?? 0,
+        },
+      };
+
+      return jsonResult(
         "Unraid system health",
-        await options.client.query(SYSTEM_HEALTH_QUERY, { includeSmart }),
-      ),
+        payload,
+        `returned up to ${limitDisks} disks per section`,
+      );
+    },
   );
 
   toolsets.add("health", tool);
@@ -171,6 +208,7 @@ function registerDockerTools(
     {
       description: "List Unraid-managed Docker containers and update availability.",
       inputSchema: {
+        limit: LimitSchema.describe("Maximum containers to return."),
         onlyUpdates: z.boolean().default(false),
       },
       annotations: {
@@ -178,17 +216,33 @@ function registerDockerTools(
         openWorldHint: true,
       },
     },
-    async ({ onlyUpdates }) => {
+    async ({ limit, onlyUpdates }) => {
       const data = await options.client.query<{
-        docker: { containers: Array<{ isUpdateAvailable?: boolean | null }> };
+        docker: {
+          containerUpdateStatuses: unknown[];
+          containers: Array<{ isUpdateAvailable?: boolean | null }>;
+        };
       }>(LIST_CONTAINERS_QUERY);
       const containers = onlyUpdates
         ? data.docker.containers.filter((container) => container.isUpdateAvailable)
         : data.docker.containers;
+      const returnedContainers = containers.slice(0, limit);
 
       return jsonResult("Unraid Docker containers", {
         ...data,
-        docker: { ...data.docker, containers },
+        docker: {
+          ...data.docker,
+          containerUpdateStatuses: data.docker.containerUpdateStatuses.slice(0, limit),
+          containers: returnedContainers,
+        },
+        summary: {
+          filter: onlyUpdates ? "updates" : "all",
+          omitted: Math.max(containers.length - returnedContainers.length, 0),
+          returned: returnedContainers.length,
+          total: data.docker.containers.length,
+          updateAvailable: data.docker.containers.filter((container) => container.isUpdateAvailable)
+            .length,
+        },
       });
     },
   );
@@ -211,6 +265,12 @@ function registerDockerTools(
       },
     },
     async ({ confirm, dryRun, id }) => {
+      if (!options.enableMutations) {
+        return textResult(
+          "Unraid mutations are disabled. Set UNRAID_ENABLE_MUTATIONS=true to allow updates.",
+        );
+      }
+
       const capabilities = await options.capabilities.getCapabilities();
       if (!capabilities.supportsDockerUpdates) {
         return textResult("This Unraid API schema does not expose Docker update mutations.");
@@ -238,6 +298,7 @@ function registerDockerTools(
       inputSchema: {
         confirm: z.boolean().default(false).describe("Must be true to perform the updates."),
         dryRun: z.boolean().default(true).describe("When true, only report update candidates."),
+        limit: LimitSchema.describe("Maximum dry-run candidates to return."),
       },
       annotations: {
         destructiveHint: true,
@@ -246,7 +307,13 @@ function registerDockerTools(
         readOnlyHint: false,
       },
     },
-    async ({ confirm, dryRun }) => {
+    async ({ confirm, dryRun, limit }) => {
+      if (!options.enableMutations) {
+        return textResult(
+          "Unraid mutations are disabled. Set UNRAID_ENABLE_MUTATIONS=true to allow updates.",
+        );
+      }
+
       const capabilities = await options.capabilities.getCapabilities();
       if (!capabilities.supportsDockerUpdates) {
         return textResult("This Unraid API schema does not expose Docker update mutations.");
@@ -256,8 +323,16 @@ function registerDockerTools(
         const data = await options.client.query<{
           docker: { containers: Array<{ isUpdateAvailable?: boolean | null }> };
         }>(LIST_CONTAINERS_QUERY);
+        const candidates = data.docker.containers.filter(
+          (container) => container.isUpdateAvailable,
+        );
         return jsonResult("Dry run: Unraid Docker update candidates", {
-          candidates: data.docker.containers.filter((container) => container.isUpdateAvailable),
+          candidates: candidates.slice(0, limit),
+          summary: {
+            omitted: Math.max(candidates.length - limit, 0),
+            returned: Math.min(candidates.length, limit),
+            totalCandidates: candidates.length,
+          },
         });
       }
 
@@ -282,13 +357,31 @@ function registerPluginTools(
     "unraid_list_plugins",
     {
       description: "List installed Unraid plugins and API plugin metadata.",
-      inputSchema: {},
+      inputSchema: {
+        limit: LimitSchema.describe("Maximum plugins to return per plugin section."),
+      },
       annotations: {
         readOnlyHint: true,
         openWorldHint: true,
       },
     },
-    async () => jsonResult("Unraid plugins", await options.client.query(LIST_PLUGINS_QUERY)),
+    async ({ limit }) => {
+      const data = await options.client.query<{
+        installedUnraidPlugins: string[];
+        plugins: unknown[];
+      }>(LIST_PLUGINS_QUERY);
+
+      return jsonResult("Unraid plugins", {
+        installedUnraidPlugins: data.installedUnraidPlugins.slice(0, limit),
+        plugins: data.plugins.slice(0, limit),
+        summary: {
+          installedReturned: Math.min(data.installedUnraidPlugins.length, limit),
+          installedTotal: data.installedUnraidPlugins.length,
+          metadataReturned: Math.min(data.plugins.length, limit),
+          metadataTotal: data.plugins.length,
+        },
+      });
+    },
   );
 
   const install = server.registerTool(
@@ -310,6 +403,17 @@ function registerPluginTools(
       },
     },
     async ({ confirm, dryRun, forced, name, url }) => {
+      if (!options.enableMutations) {
+        return textResult(
+          "Unraid mutations are disabled. Set UNRAID_ENABLE_MUTATIONS=true to allow plugin installs.",
+        );
+      }
+
+      const pluginUrlError = validatePluginInstallUrl(url, options.pluginHostAllowlist);
+      if (pluginUrlError) {
+        return textResult(pluginUrlError);
+      }
+
       const capabilities = await options.capabilities.getCapabilities();
       if (!capabilities.supportsPluginInstall) {
         return textResult("This Unraid API schema does not expose plugin install mutations.");
@@ -382,6 +486,12 @@ function registerRawGraphqlTool(server: McpServer, options: BuildServerOptions) 
       },
     },
     async ({ query, variables }) => {
+      if (!options.enableMutations && looksLikeGraphqlMutation(query)) {
+        return textResult(
+          "Raw GraphQL mutations are disabled. Set UNRAID_ENABLE_MUTATIONS=true to allow them.",
+        );
+      }
+
       try {
         return jsonResult("Unraid GraphQL result", await options.client.query(query, variables));
       } catch (error) {

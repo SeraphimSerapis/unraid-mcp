@@ -7,6 +7,7 @@ describe("loadConfig", () => {
     const config = loadConfig({
       MCP_HTTP_PORT: "3333",
       MCP_TRANSPORT: "http",
+      MCP_HTTP_BEARER_TOKEN: "0123456789abcdef",
       UNRAID_API_KEY: "secret",
       UNRAID_DEFAULT_TOOLSETS: "health,docker",
       UNRAID_URL: "https://tower.local/graphql",
@@ -16,5 +17,26 @@ describe("loadConfig", () => {
     expect(config.http.port).toBe(3333);
     expect(config.unraid.defaultToolsets).toEqual(["health", "docker"]);
     expect(config.unraid.endpoint?.toString()).toBe("https://tower.local/graphql");
+  });
+
+  it("requires an HTTP bearer token by default", () => {
+    expect(() =>
+      loadConfig({
+        MCP_TRANSPORT: "http",
+        UNRAID_API_KEY: "secret",
+        UNRAID_URL: "https://tower.local/graphql",
+      }),
+    ).toThrow("MCP_HTTP_BEARER_TOKEN is required");
+  });
+
+  it("allows explicit unauthenticated HTTP mode for local test harnesses", () => {
+    const config = loadConfig({
+      MCP_HTTP_ALLOW_UNAUTHENTICATED: "true",
+      MCP_TRANSPORT: "http",
+      UNRAID_API_KEY: "secret",
+      UNRAID_URL: "https://tower.local/graphql",
+    });
+
+    expect(config.http.allowUnauthenticated).toBe(true);
   });
 });
