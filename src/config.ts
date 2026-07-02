@@ -34,6 +34,7 @@ const StringList = z
 
 const EnvSchema = z.object({
   MCP_HTTP_ALLOW_UNAUTHENTICATED: BooleanFromString,
+  MCP_HTTP_ALLOWED_HOSTS: StringList,
   MCP_HTTP_BEARER_TOKEN: z.string().min(16).optional(),
   MCP_HTTP_HOST: z.string().default("127.0.0.1"),
   MCP_HTTP_MAX_SESSIONS: NumberFromString(50),
@@ -72,6 +73,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   return {
     http: {
       allowUnauthenticated: parsed.MCP_HTTP_ALLOW_UNAUTHENTICATED,
+      allowedHosts: parsed.MCP_HTTP_ALLOWED_HOSTS,
       bearerToken: parsed.MCP_HTTP_BEARER_TOKEN,
       host: parsed.MCP_HTTP_HOST,
       maxSessions: parsed.MCP_HTTP_MAX_SESSIONS,

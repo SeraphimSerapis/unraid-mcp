@@ -47,7 +47,12 @@ async function serveStdio() {
 }
 
 function serveHttp() {
-  const app = createMcpExpressApp();
+  const app = createMcpExpressApp({
+    host: appConfig.http.host,
+    ...(appConfig.http.allowedHosts.length > 0
+      ? { allowedHosts: appConfig.http.allowedHosts }
+      : {}),
+  });
   const sessions = new Map<
     string,
     {
