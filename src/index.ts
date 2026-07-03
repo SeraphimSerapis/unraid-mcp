@@ -25,6 +25,7 @@ const client = new UnraidClient({
   endpoint: appConfig.unraid.endpoint,
   maxConcurrency: appConfig.unraid.maxConcurrency,
   maxResponseBytes: appConfig.unraid.maxResponseBytes,
+  mutationTimeoutMs: appConfig.unraid.mutationTimeoutMs,
   rateLimitPer10s: appConfig.unraid.rateLimitPer10s,
   requestTimeoutMs: appConfig.unraid.requestTimeoutMs,
 });
@@ -37,6 +38,7 @@ function makeServer() {
     capabilities,
     client,
     enableMutations: appConfig.unraid.enableMutations,
+    mutationTimeoutMs: appConfig.unraid.mutationTimeoutMs,
     pluginHostAllowlist: appConfig.unraid.pluginHostAllowlist,
   });
 }

@@ -23,6 +23,7 @@ interface BuildServerOptions {
   capabilities: CapabilityService;
   client: UnraidClient;
   enableMutations: boolean;
+  mutationTimeoutMs: number;
   pluginHostAllowlist: string[];
 }
 
@@ -72,19 +73,11 @@ interface DockerContainerSummary {
   status?: string | null;
 }
 
-export function buildMcpServer(options: BuildServerOptions) {
-  const server = new McpServer(
-    {
-      name: "unraid-mcp",
-      version: "0.1.0",
-      websiteUrl: "https://github.com/tim/unraid-mcp",
-    },
-    {
-      capabilities: {
-        logging: {},
-      },
-    },
-  );
+export function buildMcpServer(
+  options: BuildServerOptions,
+  createServer: () => McpServer = defaultMcpServer,
+) {
+  const server = createServer();
 
   registerCoreTools(server, options);
   registerHealthTools(server, options);
@@ -96,6 +89,21 @@ export function buildMcpServer(options: BuildServerOptions) {
   }
 
   return server;
+}
+
+function defaultMcpServer() {
+  return new McpServer(
+    {
+      name: "unraid-mcp",
+      version: "0.1.0",
+      websiteUrl: "https://github.com/tim/unraid-mcp",
+    },
+    {
+      capabilities: {
+        logging: {},
+      },
+    },
+  );
 }
 
 function registerCoreTools(server: McpServer, options: BuildServerOptions) {
@@ -369,12 +377,12 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
         total: data.docker.containers.length,
         updateAvailable: updateCount,
       };
-      const names = returnedContainers.flatMap(containerNames).slice(0, 8);
+      const labels = returnedContainers.slice(0, 8).map(containerLabel);
       const textSummary = [
         `${summary.returned}/${summary.total} containers returned`,
         `${summary.updateAvailable} update${summary.updateAvailable === 1 ? "" : "s"} available`,
         summary.omitted > 0 ? `${summary.omitted} omitted by limit` : undefined,
-        names.length > 0 ? `shown: ${names.join(", ")}` : undefined,
+        labels.length > 0 ? `shown: ${labels.join(", ")}` : undefined,
       ]
         .filter(Boolean)
         .join("; ");
@@ -401,11 +409,18 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
     "unraid_update_container",
     {
       description:
-        "Update one Unraid-managed Docker container using Unraid's native Docker manager.",
+        "Update one Unraid-managed Docker container using Unraid's native Docker manager. Pass either `id` (PrefixedID from unraid_list_containers) or `name` (container name; resolved to id automatically).",
       inputSchema: {
         confirm: z.boolean().default(false).describe("Must be true to perform the update."),
         dryRun: z.boolean().default(true).describe("When true, only report the intended action."),
-        id: z.string().describe("Container PrefixedID or raw container id accepted by Unraid."),
+        id: z
+          .string()
+          .optional()
+          .describe("Container PrefixedID from unraid_list_containers."),
+        name: z
+          .string()
+          .optional()
+          .describe("Container name (e.g. 'webdav' or '/webdav'). Resolved to id automatically."),
       },
       annotations: {
         destructiveHint: true,
@@ -414,7 +429,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
         readOnlyHint: false,
       },
     },
-    async ({ confirm, dryRun, id }) => {
+    async ({ confirm, dryRun, id, name }) => {
       if (!options.enableMutations) {
         return textResult(
           "Unraid mutations are disabled. Set UNRAID_ENABLE_MUTATIONS=true to allow updates.",
@@ -426,16 +441,41 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
         return textResult("This Unraid API schema does not expose Docker update mutations.");
       }
 
-      if (dryRun || !confirm) {
+      if ((id && name) || (!id && !name)) {
         return textResult(
-          `Dry run: would call docker.updateContainer for ${id}. Re-run with dryRun=false and confirm=true to update.`,
-          { id },
+          "Provide exactly one of `id` (container PrefixedID) or `name` (container name from unraid_list_containers).",
         );
       }
 
+      let resolvedId = id ?? null;
+      if (!resolvedId && name) {
+        const data = await options.client.query<{
+          docker: { containers: DockerContainerSummary[] };
+        }>(listContainersQuery(capabilities));
+        resolvedId = resolveContainerIdByName(data.docker.containers, name);
+        if (!resolvedId) {
+          return textResult(
+            `No container matched name "${name}". Call unraid_list_containers for available names.`,
+          );
+        }
+      }
+
+      if (dryRun || !confirm) {
+        return textResult(
+          `Dry run: would call docker.updateContainer for ${resolvedId}. Re-run with dryRun=false and confirm=true to update.`,
+          { id: resolvedId, name: name ?? null },
+        );
+      }
+
+      const data = await options.client.query(
+        UPDATE_CONTAINER_MUTATION,
+        { id: resolvedId },
+        { timeoutMs: options.mutationTimeoutMs },
+      );
       return jsonResult(
         "Unraid Docker update started",
-        await options.client.query(UPDATE_CONTAINER_MUTATION, { id }),
+        data,
+        `update requested for ${resolvedId}`,
       );
     },
   );
@@ -478,7 +518,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
           (container) => container.isUpdateAvailable,
         );
         const returnedCandidates = candidates.slice(0, limit);
-        const names = returnedCandidates.flatMap(containerNames).slice(0, 8);
+        const labels = returnedCandidates.slice(0, 8).map(containerLabel);
         return jsonResult(
           "Dry run: Unraid Docker update candidates",
           {
@@ -491,7 +531,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
           },
           [
             `${candidates.length} update candidate${candidates.length === 1 ? "" : "s"}`,
-            names.length > 0 ? `candidates: ${names.join(", ")}` : undefined,
+            labels.length > 0 ? `candidates: ${labels.join(", ")}` : undefined,
             "re-run with dryRun=false and confirm=true to update all",
           ]
             .filter(Boolean)
@@ -501,7 +541,9 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
 
       return jsonResult(
         "Unraid Docker updates started",
-        await options.client.query(UPDATE_ALL_CONTAINERS_MUTATION),
+        await options.client.query(UPDATE_ALL_CONTAINERS_MUTATION, undefined, {
+          timeoutMs: options.mutationTimeoutMs,
+        }),
       );
     },
   );
@@ -628,20 +670,45 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
   );
 }
 
-function containerNames(container: DockerContainerSummary) {
-  if (container.names?.length) {
-    return container.names;
+function containerLabel(container: DockerContainerSummary): string {
+  const displayName = container.names?.[0]?.replace(/^\//, "");
+  if (container.id && displayName) {
+    return `${container.id} (${displayName})`;
   }
 
   if (container.id) {
-    return [container.id];
+    return container.id;
   }
 
-  if (container.image) {
-    return [container.image];
+  if (displayName) {
+    return displayName;
   }
 
-  return [];
+  return container.image ?? "(unknown)";
+}
+
+export function resolveContainerIdByName(
+  containers: DockerContainerSummary[],
+  name: string,
+): string | null {
+  const target = name.replace(/^\//, "").toLowerCase();
+  if (!target) {
+    return null;
+  }
+
+  for (const container of containers) {
+    if (!container.id) {
+      continue;
+    }
+
+    for (const candidate of container.names ?? []) {
+      if (candidate.replace(/^\//, "").toLowerCase() === target) {
+        return container.id;
+      }
+    }
+  }
+
+  return null;
 }
 
 function registerPluginTools(server: McpServer, options: BuildServerOptions) {

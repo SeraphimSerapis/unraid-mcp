@@ -93,4 +93,26 @@ describe("UnraidClient", () => {
 
     await expect(client.query("query { big }")).rejects.toThrow(/UNRAID_MAX_RESPONSE_BYTES/);
   });
+
+  it("uses the per-request timeout override instead of the client default", async () => {
+    const fetchImpl: typeof fetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        if (init?.signal?.aborted) {
+          reject(new Error("aborted"));
+          return;
+        }
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+
+    const client = new UnraidClient({
+      apiKey: "secret",
+      endpoint: new URL("https://tower.local/graphql"),
+      fetchImpl,
+      requestTimeoutMs: 10_000,
+    });
+
+    await expect(
+      client.query("query { online }", undefined, { timeoutMs: 1 }),
+    ).rejects.toThrow(/aborted/i);
+  });
 });

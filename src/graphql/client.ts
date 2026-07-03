@@ -11,6 +11,7 @@ export interface UnraidClientOptions {
   allowInsecureTls?: boolean;
   maxConcurrency?: number;
   maxResponseBytes?: number;
+  mutationTimeoutMs?: number;
   rateLimitPer10s?: number;
   requestTimeoutMs?: number;
 }
@@ -114,6 +115,7 @@ export class UnraidClient {
   private readonly fetchImpl: Fetch;
   private readonly dispatcher: Dispatcher | undefined;
   private readonly maxResponseBytes: number;
+  private readonly mutationTimeoutMs: number;
   private readonly rateLimiter: TokenBucket;
   private readonly semaphore: Semaphore;
   private readonly timeoutMs: number;
@@ -128,6 +130,7 @@ export class UnraidClient {
         })
       : undefined;
     this.maxResponseBytes = options.maxResponseBytes ?? 1_000_000;
+    this.mutationTimeoutMs = options.mutationTimeoutMs ?? 300_000;
     this.rateLimiter = new TokenBucket(
       options.rateLimitPer10s ?? 90,
       (options.rateLimitPer10s ?? 90) / 10_000,
@@ -136,7 +139,11 @@ export class UnraidClient {
     this.semaphore = new Semaphore(options.maxConcurrency ?? 4);
   }
 
-  async query<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+  async query<T>(
+    query: string,
+    variables?: Record<string, unknown>,
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
     if (!this.options.endpoint) {
       throw new ConfigurationError("UNRAID_URL is required before calling Unraid tools.");
     }
@@ -154,7 +161,7 @@ export class UnraidClient {
           "x-api-key": this.options.apiKey!,
         },
         method: "POST",
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(options.timeoutMs ?? this.timeoutMs),
       };
 
       const response = this.dispatcher

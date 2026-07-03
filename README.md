@@ -74,6 +74,10 @@ All first-class tools are registered up front so clients that cache `tools/list`
 
 Large list tools return concise visible text plus structured data, and accept `limit` or filter inputs so an MCP client does not have to ingest every container or plugin at once. For Docker update discovery, call `unraid_list_containers` with `onlyUpdates=true`.
 
+The Docker list and update tools share a single identifier convention: `unraid_list_containers` returns each container as `id (name)` in the visible text (for example `container-abc123 (webdav)`) and `unraid_update_container` accepts either the `id` PrefixedID or the `name` (with or without the leading `/`). Supply exactly one of the two.
+
+Docker update mutations can take much longer than ordinary queries because they pull images and recreate containers. `unraid_update_container` and `unraid_update_all_containers` therefore use `UNRAID_MUTATION_TIMEOUT_MS` (default 5 minutes) instead of `UNRAID_REQUEST_TIMEOUT_MS`. Increase it if you update many or large containers.
+
 ## Security
 
 - Store `UNRAID_API_KEY` in environment/secrets, never in git.
