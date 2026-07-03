@@ -15,13 +15,18 @@ describe("buildCapabilities", () => {
       },
       dockerMutations: {
         fields: [
+          { name: "updateAutostartConfiguration" },
           { name: "updateContainer" },
           { name: "updateContainers" },
           { name: "updateAllContainers" },
         ],
       },
       mutation: {
-        fields: [{ name: "docker" }],
+        fields: [
+          { name: "docker" },
+          { name: "refreshDockerDigests" },
+          { name: "syncDockerTemplatePaths" },
+        ],
       },
       query: {
         fields: [{ name: "docker" }, { name: "array" }],
@@ -29,6 +34,9 @@ describe("buildCapabilities", () => {
     });
 
     expect(capabilities.supportsDockerUpdates).toBe(true);
+    expect(capabilities.supportsDockerAutostartUpdates).toBe(true);
+    expect(capabilities.supportsDockerDigestRefresh).toBe(true);
+    expect(capabilities.supportsDockerTemplatePathSync).toBe(true);
     expect(capabilities.availableToolsets).toContain("docker");
   });
 

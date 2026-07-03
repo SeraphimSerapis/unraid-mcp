@@ -10,6 +10,8 @@ export interface UnraidClientOptions {
   fetchImpl?: Fetch;
   allowInsecureTls?: boolean;
   maxConcurrency?: number;
+  maxResponseBytes?: number;
+  rateLimitPer10s?: number;
   requestTimeoutMs?: number;
 }
 
@@ -49,9 +51,70 @@ class Semaphore {
   }
 }
 
+class TokenBucket {
+  private tokens: number;
+  private lastRefill = Date.now();
+  private readonly queue: Array<() => void> = [];
+  private draining = false;
+
+  constructor(
+    private readonly maxTokens: number,
+    private readonly refillPerMs: number,
+  ) {
+    this.tokens = maxTokens;
+  }
+
+  async acquire() {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      this.queue.push(resolve);
+      this.scheduleDrain();
+    });
+  }
+
+  private refill() {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    this.tokens = Math.min(this.maxTokens, this.tokens + elapsed * this.refillPerMs);
+    this.lastRefill = now;
+  }
+
+  private scheduleDrain() {
+    if (this.draining) {
+      return;
+    }
+
+    this.draining = true;
+    const drain = () => {
+      this.refill();
+      while (this.tokens >= 1 && this.queue.length > 0) {
+        this.tokens -= 1;
+        this.queue.shift()?.();
+      }
+
+      if (this.queue.length === 0) {
+        this.draining = false;
+        return;
+      }
+
+      const waitMs = Math.max(Math.ceil((1 - this.tokens) / this.refillPerMs), 1);
+      setTimeout(drain, waitMs).unref();
+    };
+
+    drain();
+  }
+}
+
 export class UnraidClient {
   private readonly fetchImpl: Fetch;
   private readonly dispatcher: Dispatcher | undefined;
+  private readonly maxResponseBytes: number;
+  private readonly rateLimiter: TokenBucket;
   private readonly semaphore: Semaphore;
   private readonly timeoutMs: number;
 
@@ -64,6 +127,11 @@ export class UnraidClient {
           },
         })
       : undefined;
+    this.maxResponseBytes = options.maxResponseBytes ?? 1_000_000;
+    this.rateLimiter = new TokenBucket(
+      options.rateLimitPer10s ?? 90,
+      (options.rateLimitPer10s ?? 90) / 10_000,
+    );
     this.timeoutMs = options.requestTimeoutMs ?? 10_000;
     this.semaphore = new Semaphore(options.maxConcurrency ?? 4);
   }
@@ -78,6 +146,7 @@ export class UnraidClient {
     }
 
     return this.semaphore.run(async () => {
+      await this.rateLimiter.acquire();
       const requestInit = {
         body: JSON.stringify({ query, variables }),
         headers: {
@@ -96,6 +165,13 @@ export class UnraidClient {
         : await this.fetchImpl(this.options.endpoint!.toString(), requestInit);
 
       const text = await response.text();
+      const responseBytes = Buffer.byteLength(text);
+      if (responseBytes > this.maxResponseBytes) {
+        throw new GraphqlRequestError(
+          `Unraid GraphQL response exceeded UNRAID_MAX_RESPONSE_BYTES (${this.maxResponseBytes}).`,
+          { responseBytes, status: response.status },
+        );
+      }
       // Surface upstream response snippets so 4xx/5xx errors are diagnosable.
       const bodySnippet =
         text.length > 200 ? `${text.slice(0, 200)}… (${text.length} bytes)` : text;

@@ -93,6 +93,9 @@ export interface UnraidCapabilities {
   queryFields: string[];
   mutationFields: string[];
   supportsArrayHealth: boolean;
+  supportsDockerAutostartUpdates: boolean;
+  supportsDockerDigestRefresh: boolean;
+  supportsDockerTemplatePathSync: boolean;
   supportsDockerUpdateStatuses: boolean;
   supportsDockerUpdates: boolean;
   supportsNestedInfoVersions: boolean;
@@ -156,6 +159,8 @@ export function buildCapabilities(
     dockerMutations.includes("updateContainer") &&
     dockerMutations.includes("updateAllContainers") &&
     dockerContainerFields.includes("isUpdateAvailable");
+  const supportsDockerAutostartUpdates =
+    mutationFields.includes("docker") && dockerMutations.includes("updateAutostartConfiguration");
 
   const supportsPluginInstall =
     mutationFields.includes("unraidPlugins") && pluginMutations.includes("installPlugin");
@@ -186,6 +191,9 @@ export function buildCapabilities(
       arrayFields.includes("state") &&
       arrayFields.includes("disks") &&
       arrayFields.includes("capacity"),
+    supportsDockerAutostartUpdates,
+    supportsDockerDigestRefresh: mutationFields.includes("refreshDockerDigests"),
+    supportsDockerTemplatePathSync: mutationFields.includes("syncDockerTemplatePaths"),
     supportsDockerUpdateStatuses: dockerFields.includes("containerUpdateStatuses"),
     supportsDockerUpdates,
     supportsNestedInfoVersions:

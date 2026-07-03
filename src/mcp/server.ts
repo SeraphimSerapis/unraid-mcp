@@ -6,27 +6,65 @@ import type { CapabilityService } from "../graphql/capabilities.js";
 import {
   INSTALL_PLUGIN_MUTATION,
   PING_QUERY,
+  REFRESH_DOCKER_DIGESTS_MUTATION,
+  SYNC_DOCKER_TEMPLATE_PATHS_MUTATION,
   UPDATE_ALL_CONTAINERS_MUTATION,
   UPDATE_CONTAINER_MUTATION,
+  UPDATE_DOCKER_AUTOSTART_MUTATION,
   listContainersQuery,
   listPluginsQuery,
   systemHealthQuery,
 } from "../graphql/operations.js";
 import { jsonResult, summarizeError, textResult } from "./result.js";
 import { looksLikeGraphqlMutation, validatePluginInstallUrl } from "./security.js";
-import { ToolsetRegistry, type ToolsetName } from "./toolsets.js";
 
 interface BuildServerOptions {
   allowRawGraphql: boolean;
   capabilities: CapabilityService;
   client: UnraidClient;
-  defaultToolsets: string[];
   enableMutations: boolean;
   pluginHostAllowlist: string[];
 }
 
 const ToolsetNameSchema = z.enum(["health", "docker", "plugins"]);
 const LimitSchema = z.number().int().min(1).max(200).default(50);
+
+const TOOLSETS = [
+  {
+    name: "health",
+    tools: [
+      "unraid_system_health - Get Unraid system, array, parity, and disk health.",
+      "unraid_diagnose - Diagnose MCP, GraphQL, schema, and tool availability.",
+    ],
+  },
+  {
+    name: "docker",
+    tools: [
+      "unraid_list_containers - List Unraid-managed Docker containers and update availability.",
+      "unraid_update_container - Update one Unraid-managed Docker container.",
+      "unraid_update_all_containers - Update every container with an available update.",
+      "unraid_refresh_docker_digests - Refresh Docker image update metadata.",
+      "unraid_sync_docker_template_paths - Sync Docker template path mappings.",
+      "unraid_update_docker_autostart - Update Docker autostart settings.",
+    ],
+  },
+  {
+    name: "plugins",
+    tools: [
+      "unraid_list_plugins - List installed Unraid plugins and API plugin metadata.",
+      "unraid_install_plugin - Install an Unraid plugin from a .plg URL.",
+      "unraid_update_plugin - Report plugin update support.",
+    ],
+  },
+] as const;
+
+interface DockerContainerSummary {
+  id?: string | null;
+  image?: string | null;
+  isUpdateAvailable?: boolean | null;
+  names?: string[] | null;
+  status?: string | null;
+}
 
 export function buildMcpServer(options: BuildServerOptions) {
   const server = new McpServer(
@@ -42,33 +80,19 @@ export function buildMcpServer(options: BuildServerOptions) {
     },
   );
 
-  const toolsets = new ToolsetRegistry();
-
-  registerCoreTools(server, options, toolsets);
-  registerHealthTools(server, options, toolsets);
-  registerDockerTools(server, options, toolsets);
-  registerPluginTools(server, options, toolsets);
+  registerCoreTools(server, options);
+  registerHealthTools(server, options);
+  registerDockerTools(server, options);
+  registerPluginTools(server, options);
 
   if (options.allowRawGraphql) {
     registerRawGraphqlTool(server, options);
   }
 
-  for (const toolset of ["health", "docker", "plugins"] satisfies ToolsetName[]) {
-    if (options.defaultToolsets.includes(toolset)) {
-      toolsets.enable(toolset);
-    } else {
-      toolsets.disable(toolset);
-    }
-  }
-
   return server;
 }
 
-function registerCoreTools(
-  server: McpServer,
-  options: BuildServerOptions,
-  toolsets: ToolsetRegistry,
-) {
+function registerCoreTools(server: McpServer, options: BuildServerOptions) {
   server.registerTool(
     "unraid_ping",
     {
@@ -79,7 +103,23 @@ function registerCoreTools(
         openWorldHint: true,
       },
     },
-    async () => jsonResult("Unraid connection OK", await options.client.query(PING_QUERY)),
+    async () => {
+      const data = await options.client.query<{
+        info?: { os?: { distro?: string | null; release?: string | null } | null } | null;
+        online?: boolean | null;
+      }>(PING_QUERY);
+      const os = data.info?.os;
+      const summary = [
+        data.online === false ? "online=false" : "online=true",
+        os?.distro ? `distro=${os.distro}` : undefined,
+        os?.release ? `release=${os.release}` : undefined,
+        "next: call unraid_capabilities or unraid_list_containers with onlyUpdates=true",
+      ]
+        .filter(Boolean)
+        .join("; ");
+
+      return jsonResult("Unraid connection OK", data, summary);
+    },
   );
 
   server.registerTool(
@@ -96,10 +136,25 @@ function registerCoreTools(
     },
     async ({ refresh }) => {
       const capabilities = await options.capabilities.getCapabilities(refresh);
-      return jsonResult("Unraid MCP capabilities", {
-        ...capabilities,
-        toolsets: toolsets.list(),
-      });
+      const summary = [
+        `schema source: ${capabilities.source}`,
+        `available toolsets: ${capabilities.availableToolsets.join(", ") || "none"}`,
+        `Docker updates: ${capabilities.supportsDockerUpdates ? "supported" : "not supported"}`,
+        `Plugin installs: ${capabilities.supportsPluginInstall ? "supported" : "not supported"}`,
+        `All tools are registered in tools/list; call unraid_list_containers for Docker updates.`,
+        capabilities.warning ? `warning: ${capabilities.warning}` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      return jsonResult(
+        "Unraid MCP capabilities",
+        {
+          ...capabilities,
+          toolsets: TOOLSETS,
+        },
+        summary,
+      );
     },
   );
 
@@ -107,10 +162,10 @@ function registerCoreTools(
     "unraid_toolset",
     {
       description:
-        "List, enable, or disable optional Unraid MCP toolsets to keep client context small.",
+        "List Unraid MCP tool groups. Tools are always registered for LiteLLM/OpenCode compatibility.",
       inputSchema: {
         action: z.enum(["list", "enable", "disable"]).default("list"),
-        name: ToolsetNameSchema.optional().describe("Toolset to enable or disable."),
+        name: ToolsetNameSchema.optional().describe("Toolset to describe."),
       },
       annotations: {
         readOnlyHint: false,
@@ -118,29 +173,31 @@ function registerCoreTools(
       },
     },
     ({ action, name }) => {
-      if (action !== "list" && !name) {
-        return textResult("Provide a toolset name when enabling or disabling tools.");
-      }
+      const selectedToolsets = name
+        ? TOOLSETS.filter((toolset) => toolset.name === name)
+        : TOOLSETS;
+      const lines = [
+        action === "list"
+          ? "Unraid MCP tools are always registered in tools/list."
+          : `No session-local enable step is required for ${name ?? "toolsets"}; tools are already registered.`,
+        "",
+        ...selectedToolsets.flatMap((toolset) => [
+          `${toolset.name}:`,
+          ...toolset.tools.map((tool) => `- ${tool}`),
+        ]),
+        "",
+        "For Docker image updates, call unraid_list_containers with onlyUpdates=true.",
+      ];
 
-      if (action === "enable") {
-        toolsets.enable(name!);
-      }
-
-      if (action === "disable") {
-        toolsets.disable(name!);
-      }
-
-      return jsonResult("Unraid MCP toolsets", { toolsets: toolsets.list() });
+      return textResult(lines.join("\n"), {
+        toolsets: selectedToolsets,
+      });
     },
   );
 }
 
-function registerHealthTools(
-  server: McpServer,
-  options: BuildServerOptions,
-  toolsets: ToolsetRegistry,
-) {
-  const tool = server.registerTool(
+function registerHealthTools(server: McpServer, options: BuildServerOptions) {
+  server.registerTool(
     "unraid_system_health",
     {
       description: "Get Unraid system, array, parity, and disk health. Deep SMART data is opt-in.",
@@ -191,24 +248,80 @@ function registerHealthTools(
           totalSmartDisks: data.disks?.length ?? 0,
         },
       };
+      const healthSummary = [
+        `array disks: ${payload.summary.arrayDisksReturned}/${payload.summary.totalArrayDisks}`,
+        `parity: ${payload.summary.arrayParitiesReturned}/${payload.summary.totalArrayParities}`,
+        `cache: ${payload.summary.arrayCachesReturned}/${payload.summary.totalArrayCaches}`,
+        includeSmart
+          ? `SMART disks: ${payload.summary.smartDisksReturned}/${payload.summary.totalSmartDisks}`
+          : "SMART skipped",
+      ].join("; ");
 
-      return jsonResult(
-        "Unraid system health",
-        payload,
-        `returned up to ${limitDisks} disks per section`,
-      );
+      return jsonResult("Unraid system health", payload, `${healthSummary}; limit=${limitDisks}`);
     },
   );
 
-  toolsets.add("health", tool);
+  server.registerTool(
+    "unraid_diagnose",
+    {
+      description:
+        "Diagnose Unraid MCP connectivity, schema mode, tool availability, and GraphQL health.",
+      inputSchema: {
+        refresh: z.boolean().default(false).describe("Refresh cached schema capabilities."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ refresh }) => {
+      const startedAt = Date.now();
+      const result: Record<string, unknown> = {
+        mcp: {
+          toolsAlwaysRegistered: true,
+          toolsets: TOOLSETS,
+        },
+        mutations: {
+          enabled: options.enableMutations,
+        },
+      };
+
+      try {
+        result.capabilities = await options.capabilities.getCapabilities(refresh);
+      } catch (error) {
+        result.capabilityError = summarizeError(error);
+      }
+
+      try {
+        result.ping = await options.client.query(PING_QUERY);
+        result.graphql = { ok: true, latencyMs: Date.now() - startedAt };
+      } catch (error) {
+        result.graphql = {
+          ok: false,
+          error: summarizeError(error),
+          latencyMs: Date.now() - startedAt,
+        };
+      }
+
+      const graphql = result.graphql as { ok: boolean; error?: string; latencyMs: number };
+      const capabilities = result.capabilities as { source?: string; warning?: string } | undefined;
+      const summary = [
+        `GraphQL: ${graphql.ok ? "ok" : "failed"} (${graphql.latencyMs}ms)`,
+        capabilities?.source ? `schema source: ${capabilities.source}` : undefined,
+        capabilities?.warning ? `warning: ${capabilities.warning}` : undefined,
+        graphql.error ? `error: ${graphql.error}` : undefined,
+        "Docker tools are always visible: unraid_list_containers, unraid_update_container, unraid_update_all_containers, unraid_refresh_docker_digests.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      return jsonResult("Unraid MCP diagnosis", result, summary);
+    },
+  );
 }
 
-function registerDockerTools(
-  server: McpServer,
-  options: BuildServerOptions,
-  toolsets: ToolsetRegistry,
-) {
-  const list = server.registerTool(
+function registerDockerTools(server: McpServer, options: BuildServerOptions) {
+  server.registerTool(
     "unraid_list_containers",
     {
       description: "List Unraid-managed Docker containers and update availability.",
@@ -226,7 +339,7 @@ function registerDockerTools(
       const data = await options.client.query<{
         docker: {
           containerUpdateStatuses?: unknown[];
-          containers: Array<{ isUpdateAvailable?: boolean | null }>;
+          containers: DockerContainerSummary[];
         };
       }>(listContainersQuery(capabilities));
       const containers = onlyUpdates
@@ -234,28 +347,45 @@ function registerDockerTools(
         : data.docker.containers;
       const returnedContainers = containers.slice(0, limit);
 
-      return jsonResult("Unraid Docker containers", {
-        ...data,
-        docker: {
-          ...data.docker,
-          ...(data.docker.containerUpdateStatuses
-            ? { containerUpdateStatuses: data.docker.containerUpdateStatuses.slice(0, limit) }
-            : {}),
-          containers: returnedContainers,
+      const updateCount = data.docker.containers.filter(
+        (container) => container.isUpdateAvailable,
+      ).length;
+      const summary = {
+        filter: onlyUpdates ? "updates" : "all",
+        omitted: Math.max(containers.length - returnedContainers.length, 0),
+        returned: returnedContainers.length,
+        total: data.docker.containers.length,
+        updateAvailable: updateCount,
+      };
+      const names = returnedContainers.flatMap(containerNames).slice(0, 8);
+      const textSummary = [
+        `${summary.returned}/${summary.total} containers returned`,
+        `${summary.updateAvailable} update${summary.updateAvailable === 1 ? "" : "s"} available`,
+        summary.omitted > 0 ? `${summary.omitted} omitted by limit` : undefined,
+        names.length > 0 ? `shown: ${names.join(", ")}` : undefined,
+      ]
+        .filter(Boolean)
+        .join("; ");
+
+      return jsonResult(
+        "Unraid Docker containers",
+        {
+          ...data,
+          docker: {
+            ...data.docker,
+            ...(data.docker.containerUpdateStatuses
+              ? { containerUpdateStatuses: data.docker.containerUpdateStatuses.slice(0, limit) }
+              : {}),
+            containers: returnedContainers,
+          },
+          summary,
         },
-        summary: {
-          filter: onlyUpdates ? "updates" : "all",
-          omitted: Math.max(containers.length - returnedContainers.length, 0),
-          returned: returnedContainers.length,
-          total: data.docker.containers.length,
-          updateAvailable: data.docker.containers.filter((container) => container.isUpdateAvailable)
-            .length,
-        },
-      });
+        textSummary,
+      );
     },
   );
 
-  const updateOne = server.registerTool(
+  server.registerTool(
     "unraid_update_container",
     {
       description:
@@ -298,7 +428,7 @@ function registerDockerTools(
     },
   );
 
-  const updateAll = server.registerTool(
+  server.registerTool(
     "unraid_update_all_containers",
     {
       description:
@@ -329,19 +459,31 @@ function registerDockerTools(
 
       if (dryRun || !confirm) {
         const data = await options.client.query<{
-          docker: { containers: Array<{ isUpdateAvailable?: boolean | null }> };
+          docker: { containers: DockerContainerSummary[] };
         }>(listContainersQuery(capabilities));
         const candidates = data.docker.containers.filter(
           (container) => container.isUpdateAvailable,
         );
-        return jsonResult("Dry run: Unraid Docker update candidates", {
-          candidates: candidates.slice(0, limit),
-          summary: {
-            omitted: Math.max(candidates.length - limit, 0),
-            returned: Math.min(candidates.length, limit),
-            totalCandidates: candidates.length,
+        const returnedCandidates = candidates.slice(0, limit);
+        const names = returnedCandidates.flatMap(containerNames).slice(0, 8);
+        return jsonResult(
+          "Dry run: Unraid Docker update candidates",
+          {
+            candidates: returnedCandidates,
+            summary: {
+              omitted: Math.max(candidates.length - limit, 0),
+              returned: Math.min(candidates.length, limit),
+              totalCandidates: candidates.length,
+            },
           },
-        });
+          [
+            `${candidates.length} update candidate${candidates.length === 1 ? "" : "s"}`,
+            names.length > 0 ? `candidates: ${names.join(", ")}` : undefined,
+            "re-run with dryRun=false and confirm=true to update all",
+          ]
+            .filter(Boolean)
+            .join("; "),
+        );
       }
 
       return jsonResult(
@@ -351,17 +493,143 @@ function registerDockerTools(
     },
   );
 
-  toolsets.add("docker", list);
-  toolsets.add("docker", updateOne);
-  toolsets.add("docker", updateAll);
+  server.registerTool(
+    "unraid_refresh_docker_digests",
+    {
+      description: "Refresh Docker image digest/update metadata using Unraid's native manager.",
+      inputSchema: {},
+      annotations: {
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: false,
+      },
+    },
+    async () => {
+      if (!options.enableMutations) {
+        return textResult(
+          "Unraid mutations are disabled. Set UNRAID_ENABLE_MUTATIONS=true to refresh Docker digests.",
+        );
+      }
+
+      const capabilities = await options.capabilities.getCapabilities();
+      if (!capabilities.supportsDockerDigestRefresh) {
+        return textResult("This Unraid API schema does not expose Docker digest refresh.");
+      }
+
+      return jsonResult(
+        "Unraid Docker digest refresh",
+        await options.client.query(REFRESH_DOCKER_DIGESTS_MUTATION),
+        "refresh requested",
+      );
+    },
+  );
+
+  server.registerTool(
+    "unraid_sync_docker_template_paths",
+    {
+      description: "Sync Unraid Docker template path mappings.",
+      inputSchema: {},
+      annotations: {
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: false,
+      },
+    },
+    async () => {
+      if (!options.enableMutations) {
+        return textResult(
+          "Unraid mutations are disabled. Set UNRAID_ENABLE_MUTATIONS=true to sync Docker template paths.",
+        );
+      }
+
+      const capabilities = await options.capabilities.getCapabilities();
+      if (!capabilities.supportsDockerTemplatePathSync) {
+        return textResult("This Unraid API schema does not expose Docker template path sync.");
+      }
+
+      return jsonResult(
+        "Unraid Docker template path sync",
+        await options.client.query(SYNC_DOCKER_TEMPLATE_PATHS_MUTATION),
+        "sync requested",
+      );
+    },
+  );
+
+  server.registerTool(
+    "unraid_update_docker_autostart",
+    {
+      description: "Update Unraid Docker autostart settings for one or more containers.",
+      inputSchema: {
+        confirm: z.boolean().default(false).describe("Must be true to persist autostart changes."),
+        dryRun: z.boolean().default(true).describe("When true, only report the intended action."),
+        entries: z
+          .array(
+            z.object({
+              autoStart: z.boolean(),
+              id: z.string(),
+              wait: z.number().int().min(0).optional(),
+            }),
+          )
+          .min(1),
+        persistUserPreferences: z.boolean().default(true),
+      },
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: false,
+      },
+    },
+    async ({ confirm, dryRun, entries, persistUserPreferences }) => {
+      if (!options.enableMutations) {
+        return textResult(
+          "Unraid mutations are disabled. Set UNRAID_ENABLE_MUTATIONS=true to update Docker autostart settings.",
+        );
+      }
+
+      const capabilities = await options.capabilities.getCapabilities();
+      if (!capabilities.supportsDockerAutostartUpdates) {
+        return textResult("This Unraid API schema does not expose Docker autostart updates.");
+      }
+
+      if (dryRun || !confirm) {
+        return jsonResult(
+          "Dry run: Unraid Docker autostart update",
+          { entries, persistUserPreferences },
+          `would update ${entries.length} autostart entr${entries.length === 1 ? "y" : "ies"}`,
+        );
+      }
+
+      return jsonResult(
+        "Unraid Docker autostart update",
+        await options.client.query(UPDATE_DOCKER_AUTOSTART_MUTATION, {
+          entries,
+          persistUserPreferences,
+        }),
+        `updated ${entries.length} autostart entr${entries.length === 1 ? "y" : "ies"}`,
+      );
+    },
+  );
 }
 
-function registerPluginTools(
-  server: McpServer,
-  options: BuildServerOptions,
-  toolsets: ToolsetRegistry,
-) {
-  const list = server.registerTool(
+function containerNames(container: DockerContainerSummary) {
+  if (container.names?.length) {
+    return container.names;
+  }
+
+  if (container.id) {
+    return [container.id];
+  }
+
+  if (container.image) {
+    return [container.image];
+  }
+
+  return [];
+}
+
+function registerPluginTools(server: McpServer, options: BuildServerOptions) {
+  server.registerTool(
     "unraid_list_plugins",
     {
       description: "List installed Unraid plugins and API plugin metadata.",
@@ -400,7 +668,7 @@ function registerPluginTools(
     },
   );
 
-  const install = server.registerTool(
+  server.registerTool(
     "unraid_install_plugin",
     {
       description: "Install an Unraid plugin from a .plg URL using the native plugin manager.",
@@ -425,7 +693,7 @@ function registerPluginTools(
         );
       }
 
-      const pluginUrlError = validatePluginInstallUrl(url, options.pluginHostAllowlist);
+      const pluginUrlError = await validatePluginInstallUrl(url, options.pluginHostAllowlist);
       if (pluginUrlError) {
         return textResult(pluginUrlError);
       }
@@ -451,7 +719,7 @@ function registerPluginTools(
     },
   );
 
-  const update = server.registerTool(
+  server.registerTool(
     "unraid_update_plugin",
     {
       description:
@@ -479,10 +747,6 @@ function registerPluginTools(
       );
     },
   );
-
-  toolsets.add("plugins", list);
-  toolsets.add("plugins", install);
-  toolsets.add("plugins", update);
 }
 
 function registerRawGraphqlTool(server: McpServer, options: BuildServerOptions) {

@@ -226,6 +226,37 @@ export const UPDATE_ALL_CONTAINERS_MUTATION = /* GraphQL */ `
   }
 `;
 
+export const REFRESH_DOCKER_DIGESTS_MUTATION = /* GraphQL */ `
+  mutation UnraidMcpRefreshDockerDigests {
+    refreshDockerDigests
+  }
+`;
+
+export const SYNC_DOCKER_TEMPLATE_PATHS_MUTATION = /* GraphQL */ `
+  mutation UnraidMcpSyncDockerTemplatePaths {
+    syncDockerTemplatePaths {
+      scanned
+      matched
+      skipped
+      errors
+    }
+  }
+`;
+
+export const UPDATE_DOCKER_AUTOSTART_MUTATION = /* GraphQL */ `
+  mutation UnraidMcpUpdateDockerAutostart(
+    $entries: [DockerAutostartEntryInput!]!
+    $persistUserPreferences: Boolean
+  ) {
+    docker {
+      updateAutostartConfiguration(
+        entries: $entries
+        persistUserPreferences: $persistUserPreferences
+      )
+    }
+  }
+`;
+
 export const INSTALL_PLUGIN_MUTATION = /* GraphQL */ `
   mutation UnraidMcpInstallPlugin($input: InstallPluginInput!) {
     unraidPlugins {

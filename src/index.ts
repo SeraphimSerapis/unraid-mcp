@@ -24,6 +24,8 @@ const client = new UnraidClient({
   apiKey: appConfig.unraid.apiKey,
   endpoint: appConfig.unraid.endpoint,
   maxConcurrency: appConfig.unraid.maxConcurrency,
+  maxResponseBytes: appConfig.unraid.maxResponseBytes,
+  rateLimitPer10s: appConfig.unraid.rateLimitPer10s,
   requestTimeoutMs: appConfig.unraid.requestTimeoutMs,
 });
 
@@ -34,7 +36,6 @@ function makeServer() {
     allowRawGraphql: appConfig.unraid.allowRawGraphql,
     capabilities,
     client,
-    defaultToolsets: appConfig.unraid.defaultToolsets,
     enableMutations: appConfig.unraid.enableMutations,
     pluginHostAllowlist: appConfig.unraid.pluginHostAllowlist,
   });

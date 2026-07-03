@@ -8,6 +8,8 @@ describe("loadConfig", () => {
       MCP_HTTP_PORT: "3333",
       MCP_TRANSPORT: "http",
       MCP_HTTP_BEARER_TOKEN: "0123456789abcdef",
+      UNRAID_MAX_RESPONSE_BYTES: "123456",
+      UNRAID_RATE_LIMIT_PER_10S: "12",
       UNRAID_API_KEY: "secret",
       UNRAID_DEFAULT_TOOLSETS: "health,docker",
       UNRAID_URL: "https://tower.local/graphql",
@@ -17,6 +19,8 @@ describe("loadConfig", () => {
     expect(config.http.port).toBe(3333);
     expect(config.unraid.defaultToolsets).toEqual(["health", "docker"]);
     expect(config.unraid.endpoint?.toString()).toBe("https://tower.local/graphql");
+    expect(config.unraid.maxResponseBytes).toBe(123456);
+    expect(config.unraid.rateLimitPer10s).toBe(12);
   });
 
   it("requires an HTTP bearer token by default", () => {

@@ -79,4 +79,18 @@ describe("UnraidClient", () => {
 
     await expect(client.query("query { online }")).rejects.toThrow(/HTTP 400: invalid api key/);
   });
+
+  it("rejects oversized GraphQL responses before parsing", async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response(JSON.stringify({ data: { payload: "x".repeat(50) } })));
+
+    const client = new UnraidClient({
+      apiKey: "secret",
+      endpoint: new URL("https://tower.local/graphql"),
+      fetchImpl,
+      maxResponseBytes: 20,
+    });
+
+    await expect(client.query("query { big }")).rejects.toThrow(/UNRAID_MAX_RESPONSE_BYTES/);
+  });
 });

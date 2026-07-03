@@ -2,13 +2,13 @@
 
 A locally deployable MCP server for Unraid using the official Unraid GraphQL API.
 
-The server is intentionally capability-aware: it inspects the GraphQL schema, keeps the default MCP tool list small, and only exposes broader toolsets when you enable them.
+The server is intentionally capability-aware: it inspects the GraphQL schema, keeps tool responses compact, and fails clearly when an operation is not available on your Unraid version.
 
 ## Features
 
 - Streamable HTTP transport for Docker deployments and stdio for local clients.
-- Dynamic MCP toolsets to reduce context bloat.
-- Docker container inventory and native Unraid container update mutations.
+- Predictable tool discovery for LiteLLM/OpenCode-style clients; all first-class tools are visible in `tools/list`.
+- Docker container inventory and native Unraid container management mutations.
 - System, array, parity, and conservative disk health queries.
 - Plugin inventory and native plugin install support.
 - Honest plugin update handling: current public schemas expose plugin install, but not a native plugin update mutation.
@@ -51,23 +51,28 @@ Health endpoint: `http://localhost:3000/healthz`
 
 Readiness endpoint: `http://localhost:3000/readyz`
 
-## Toolsets
+## Tools
 
-Always-on bootstrap tools:
+All first-class tools are registered up front so clients that cache `tools/list` or ignore MCP tool-list change notifications can still discover Docker and plugin operations.
 
 - `unraid_ping`
 - `unraid_capabilities`
 - `unraid_toolset`
+- `unraid_system_health`
+- `unraid_diagnose`
+- `unraid_list_containers`
+- `unraid_update_container`
+- `unraid_update_all_containers`
+- `unraid_refresh_docker_digests`
+- `unraid_sync_docker_template_paths`
+- `unraid_update_docker_autostart`
+- `unraid_list_plugins`
+- `unraid_install_plugin`
+- `unraid_update_plugin`
 
-Optional toolsets:
+`unraid_toolset` is now informational. It groups tools by area and exists to help agents choose the right next call; it does not hide or reveal tools at runtime.
 
-- `health`: `unraid_system_health`
-- `docker`: `unraid_list_containers`, `unraid_update_container`, `unraid_update_all_containers`
-- `plugins`: `unraid_list_plugins`, `unraid_install_plugin`, `unraid_update_plugin`
-
-Use `unraid_toolset` with `action=enable` and `name=docker` or `name=plugins` when you need more tools. The MCP SDK emits tool-list change notifications after enable/disable.
-
-Large list tools return concise text plus structured data, and accept `limit` inputs so an MCP client does not have to ingest every container or plugin at once.
+Large list tools return concise visible text plus structured data, and accept `limit` or filter inputs so an MCP client does not have to ingest every container or plugin at once. For Docker update discovery, call `unraid_list_containers` with `onlyUpdates=true`.
 
 ## Security
 
@@ -76,7 +81,8 @@ Large list tools return concise text plus structured data, and accept `limit` in
 - Bind published Docker ports to localhost, Tailscale, or a trusted reverse proxy. The compose example uses `127.0.0.1:3000:3000` on purpose.
 - Prefer scoped API permissions such as `DOCKER:READ_ANY`, `DOCKER:UPDATE_ANY`, `ARRAY:READ_ANY`, `DISK:READ_ANY`, and `INFO:READ_ANY` instead of admin when possible.
 - Mutating tools require `UNRAID_ENABLE_MUTATIONS=true`, default to `dryRun=true`, and require `confirm=true`.
-- Plugin installs only accept `https` `.plg` URLs without embedded credentials. Set `UNRAID_PLUGIN_HOST_ALLOWLIST` to restrict install sources further.
+- Plugin installs only accept `https` `.plg` URLs without embedded credentials, reject non-public destination addresses, and can be restricted further with `UNRAID_PLUGIN_HOST_ALLOWLIST`.
+- GraphQL requests are bounded by `UNRAID_MAX_CONCURRENCY`, `UNRAID_RATE_LIMIT_PER_10S`, `UNRAID_REQUEST_TIMEOUT_MS`, and `UNRAID_MAX_RESPONSE_BYTES`.
 - `UNRAID_ENABLE_RAW_GRAPHQL=false` by default because raw GraphQL gives callers arbitrary API reach.
 - `UNRAID_ALLOW_INSECURE_TLS=false` by default. Only enable it for lab systems with self-signed certificates you explicitly trust.
 
@@ -122,6 +128,6 @@ Tagging policy:
 
 ## Known API Boundaries
 
-Docker update support is present in current Unraid API schemas via `docker.updateContainer`, `docker.updateContainers`, and `docker.updateAllContainers`.
+Docker update support is present in current Unraid API schemas via `docker.updateContainer`, `docker.updateContainers`, and `docker.updateAllContainers`. Docker digest refresh, template path sync, and autostart updates are capability-checked before use and report a clear unsupported-schema message when absent.
 
 Plugin installation is present via `unraidPlugins.installPlugin`. Plugin update is not currently exposed as a native mutation in the schema inspected from `unraid/api` v4.35.1, so this MCP server reports that limitation rather than shelling out or scraping the UI.

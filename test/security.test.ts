@@ -19,23 +19,28 @@ describe("isAuthorizedBearer", () => {
 });
 
 describe("validatePluginInstallUrl", () => {
-  it("accepts allowlisted https .plg URLs", () => {
-    expect(
-      validatePluginInstallUrl("https://raw.githubusercontent.com/example/plugin.plg", [
-        "raw.githubusercontent.com",
-      ]),
-    ).toBeUndefined();
+  it("accepts public https .plg URLs", async () => {
+    await expect(
+      validatePluginInstallUrl("https://8.8.8.8/example/plugin.plg", []),
+    ).resolves.toBeUndefined();
   });
 
-  it("rejects unsafe plugin URLs", () => {
-    expect(validatePluginInstallUrl("http://example.test/plugin.plg", [])).toContain("https");
-    expect(validatePluginInstallUrl("https://example.test/plugin.txt", [])).toContain(".plg");
-    expect(validatePluginInstallUrl("https://user:pass@example.test/plugin.plg", [])).toContain(
-      "credentials",
+  it("rejects unsafe plugin URLs", async () => {
+    await expect(validatePluginInstallUrl("http://example.test/plugin.plg", [])).resolves.toContain(
+      "https",
     );
-    expect(
+    await expect(
+      validatePluginInstallUrl("https://example.test/plugin.txt", []),
+    ).resolves.toContain(".plg");
+    await expect(
+      validatePluginInstallUrl("https://user:pass@example.test/plugin.plg", []),
+    ).resolves.toContain("credentials");
+    await expect(
       validatePluginInstallUrl("https://example.test/plugin.plg", ["plugins.example"]),
-    ).toContain("ALLOWLIST");
+    ).resolves.toContain("ALLOWLIST");
+    await expect(validatePluginInstallUrl("https://127.0.0.1/plugin.plg", [])).resolves.toContain(
+      "non-public",
+    );
   });
 });
 
