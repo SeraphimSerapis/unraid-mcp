@@ -47,4 +47,36 @@ describe("UnraidClient", () => {
 
     await expect(client.query("query { online }")).rejects.toThrow(GraphqlRequestError);
   });
+
+  it("surfaces the response body on a non-JSON 4xx", async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response("<html>400 Bad Request: no host</html>", { status: 400 }));
+
+    const client = new UnraidClient({
+      apiKey: "secret",
+      endpoint: new URL("https://tower.local/graphql"),
+      fetchImpl,
+    });
+
+    await expect(client.query("query { online }")).rejects.toThrow(
+      /non-JSON response with status 400:.*400 Bad Request: no host/,
+    );
+  });
+
+  it("surfaces GraphQL error messages on a JSON 4xx", async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ errors: [{ message: "invalid api key" }] }), {
+          status: 400,
+        }),
+      );
+
+    const client = new UnraidClient({
+      apiKey: "secret",
+      endpoint: new URL("https://tower.local/graphql"),
+      fetchImpl,
+    });
+
+    await expect(client.query("query { online }")).rejects.toThrow(/HTTP 400: invalid api key/);
+  });
 });

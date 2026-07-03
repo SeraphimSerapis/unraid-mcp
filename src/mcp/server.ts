@@ -5,12 +5,12 @@ import type { UnraidClient } from "../graphql/client.js";
 import type { CapabilityService } from "../graphql/capabilities.js";
 import {
   INSTALL_PLUGIN_MUTATION,
-  LIST_CONTAINERS_QUERY,
-  LIST_PLUGINS_QUERY,
   PING_QUERY,
-  SYSTEM_HEALTH_QUERY,
   UPDATE_ALL_CONTAINERS_MUTATION,
   UPDATE_CONTAINER_MUTATION,
+  listContainersQuery,
+  listPluginsQuery,
+  systemHealthQuery,
 } from "../graphql/operations.js";
 import { jsonResult, summarizeError, textResult } from "./result.js";
 import { looksLikeGraphqlMutation, validatePluginInstallUrl } from "./security.js";
@@ -157,32 +157,37 @@ function registerHealthTools(
       },
     },
     async ({ includeSmart, limitDisks }) => {
+      const capabilities = await options.capabilities.getCapabilities();
       const data = await options.client.query<{
-        array: {
+        array?: {
           caches: unknown[];
           disks: unknown[];
           parities: unknown[];
         };
         disks?: unknown[];
-      }>(SYSTEM_HEALTH_QUERY, { includeSmart });
+      }>(systemHealthQuery(capabilities), { includeSmart });
 
       const payload = {
         ...data,
-        array: {
-          ...data.array,
-          caches: data.array.caches.slice(0, limitDisks),
-          disks: data.array.disks.slice(0, limitDisks),
-          parities: data.array.parities.slice(0, limitDisks),
-        },
+        ...(data.array
+          ? {
+              array: {
+                ...data.array,
+                caches: data.array.caches.slice(0, limitDisks),
+                disks: data.array.disks.slice(0, limitDisks),
+                parities: data.array.parities.slice(0, limitDisks),
+              },
+            }
+          : {}),
         ...(data.disks ? { disks: data.disks.slice(0, limitDisks) } : {}),
         summary: {
-          arrayCachesReturned: Math.min(data.array.caches.length, limitDisks),
-          arrayDisksReturned: Math.min(data.array.disks.length, limitDisks),
-          arrayParitiesReturned: Math.min(data.array.parities.length, limitDisks),
+          arrayCachesReturned: data.array ? Math.min(data.array.caches.length, limitDisks) : 0,
+          arrayDisksReturned: data.array ? Math.min(data.array.disks.length, limitDisks) : 0,
+          arrayParitiesReturned: data.array ? Math.min(data.array.parities.length, limitDisks) : 0,
           smartDisksReturned: data.disks ? Math.min(data.disks.length, limitDisks) : 0,
-          totalArrayCaches: data.array.caches.length,
-          totalArrayDisks: data.array.disks.length,
-          totalArrayParities: data.array.parities.length,
+          totalArrayCaches: data.array?.caches.length ?? 0,
+          totalArrayDisks: data.array?.disks.length ?? 0,
+          totalArrayParities: data.array?.parities.length ?? 0,
           totalSmartDisks: data.disks?.length ?? 0,
         },
       };
@@ -217,12 +222,13 @@ function registerDockerTools(
       },
     },
     async ({ limit, onlyUpdates }) => {
+      const capabilities = await options.capabilities.getCapabilities();
       const data = await options.client.query<{
         docker: {
-          containerUpdateStatuses: unknown[];
+          containerUpdateStatuses?: unknown[];
           containers: Array<{ isUpdateAvailable?: boolean | null }>;
         };
-      }>(LIST_CONTAINERS_QUERY);
+      }>(listContainersQuery(capabilities));
       const containers = onlyUpdates
         ? data.docker.containers.filter((container) => container.isUpdateAvailable)
         : data.docker.containers;
@@ -232,7 +238,9 @@ function registerDockerTools(
         ...data,
         docker: {
           ...data.docker,
-          containerUpdateStatuses: data.docker.containerUpdateStatuses.slice(0, limit),
+          ...(data.docker.containerUpdateStatuses
+            ? { containerUpdateStatuses: data.docker.containerUpdateStatuses.slice(0, limit) }
+            : {}),
           containers: returnedContainers,
         },
         summary: {
@@ -322,7 +330,7 @@ function registerDockerTools(
       if (dryRun || !confirm) {
         const data = await options.client.query<{
           docker: { containers: Array<{ isUpdateAvailable?: boolean | null }> };
-        }>(LIST_CONTAINERS_QUERY);
+        }>(listContainersQuery(capabilities));
         const candidates = data.docker.containers.filter(
           (container) => container.isUpdateAvailable,
         );
@@ -366,19 +374,27 @@ function registerPluginTools(
       },
     },
     async ({ limit }) => {
+      const capabilities = await options.capabilities.getCapabilities();
+      const query = listPluginsQuery(capabilities);
+      if (!query) {
+        return textResult("This Unraid API schema does not expose plugin list queries.");
+      }
+
       const data = await options.client.query<{
-        installedUnraidPlugins: string[];
-        plugins: unknown[];
-      }>(LIST_PLUGINS_QUERY);
+        installedUnraidPlugins?: string[];
+        plugins?: unknown[];
+      }>(query);
+      const installedUnraidPlugins = data.installedUnraidPlugins ?? [];
+      const plugins = data.plugins ?? [];
 
       return jsonResult("Unraid plugins", {
-        installedUnraidPlugins: data.installedUnraidPlugins.slice(0, limit),
-        plugins: data.plugins.slice(0, limit),
+        installedUnraidPlugins: installedUnraidPlugins.slice(0, limit),
+        plugins: plugins.slice(0, limit),
         summary: {
-          installedReturned: Math.min(data.installedUnraidPlugins.length, limit),
-          installedTotal: data.installedUnraidPlugins.length,
-          metadataReturned: Math.min(data.plugins.length, limit),
-          metadataTotal: data.plugins.length,
+          installedReturned: Math.min(installedUnraidPlugins.length, limit),
+          installedTotal: installedUnraidPlugins.length,
+          metadataReturned: Math.min(plugins.length, limit),
+          metadataTotal: plugins.length,
         },
       });
     },

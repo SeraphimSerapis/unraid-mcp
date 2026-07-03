@@ -96,22 +96,28 @@ export class UnraidClient {
         : await this.fetchImpl(this.options.endpoint!.toString(), requestInit);
 
       const text = await response.text();
+      // Surface upstream response snippets so 4xx/5xx errors are diagnosable.
+      const bodySnippet =
+        text.length > 200 ? `${text.slice(0, 200)}… (${text.length} bytes)` : text;
       let envelope: GraphqlEnvelope<T>;
 
       try {
         envelope = JSON.parse(text) as GraphqlEnvelope<T>;
       } catch (error) {
         throw new GraphqlRequestError(
-          `Unraid GraphQL returned non-JSON response with status ${response.status}.`,
+          `Unraid GraphQL returned non-JSON response with status ${response.status}: ${bodySnippet}`,
           { cause: String(error), status: response.status },
         );
       }
 
       if (!response.ok) {
-        throw new GraphqlRequestError(`Unraid GraphQL returned HTTP ${response.status}.`, {
-          errors: envelope.errors,
-          status: response.status,
-        });
+        const detail = envelope.errors?.length
+          ? envelope.errors.map((item) => item.message).join("; ")
+          : bodySnippet;
+        throw new GraphqlRequestError(
+          `Unraid GraphQL returned HTTP ${response.status}: ${detail}`,
+          { errors: envelope.errors, status: response.status },
+        );
       }
 
       if (envelope.errors?.length) {
