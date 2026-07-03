@@ -1,6 +1,6 @@
 {
   "name": "unraid-mcp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Capability-aware MCP server for Unraid's official GraphQL API.",
   "main": "dist/index.js",
   "scripts": {
