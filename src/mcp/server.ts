@@ -28,6 +28,12 @@ interface BuildServerOptions {
 
 const ToolsetNameSchema = z.enum(["health", "docker", "plugins"]);
 const LimitSchema = z.number().int().min(1).max(200).default(50);
+const JsonResultOutputSchema = {
+  result: z.unknown().describe("Structured tool result payload."),
+};
+const ToolsetOutputSchema = {
+  toolsets: z.unknown().describe("Available Unraid MCP tool groups and their tools."),
+};
 
 const TOOLSETS = [
   {
@@ -98,6 +104,7 @@ function registerCoreTools(server: McpServer, options: BuildServerOptions) {
     {
       description: "Check Unraid API connectivity and return version basics.",
       inputSchema: {},
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         readOnlyHint: true,
         openWorldHint: true,
@@ -129,6 +136,7 @@ function registerCoreTools(server: McpServer, options: BuildServerOptions) {
       inputSchema: {
         refresh: z.boolean().default(false).describe("Refresh cached schema capabilities."),
       },
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         readOnlyHint: true,
         openWorldHint: true,
@@ -167,6 +175,7 @@ function registerCoreTools(server: McpServer, options: BuildServerOptions) {
         action: z.enum(["list", "enable", "disable"]).default("list"),
         name: ToolsetNameSchema.optional().describe("Toolset to describe."),
       },
+      outputSchema: ToolsetOutputSchema,
       annotations: {
         readOnlyHint: false,
         openWorldHint: false,
@@ -208,6 +217,7 @@ function registerHealthTools(server: McpServer, options: BuildServerOptions) {
           .describe("Include SMART details from Query.disks. May wake disks on some systems."),
         limitDisks: LimitSchema.describe("Maximum disks to return per disk section."),
       },
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         readOnlyHint: true,
         openWorldHint: true,
@@ -269,6 +279,7 @@ function registerHealthTools(server: McpServer, options: BuildServerOptions) {
       inputSchema: {
         refresh: z.boolean().default(false).describe("Refresh cached schema capabilities."),
       },
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         readOnlyHint: true,
         openWorldHint: true,
@@ -329,6 +340,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
         limit: LimitSchema.describe("Maximum containers to return."),
         onlyUpdates: z.boolean().default(false),
       },
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         readOnlyHint: true,
         openWorldHint: true,
@@ -438,6 +450,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
         dryRun: z.boolean().default(true).describe("When true, only report update candidates."),
         limit: LimitSchema.describe("Maximum dry-run candidates to return."),
       },
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         destructiveHint: true,
         idempotentHint: false,
@@ -498,6 +511,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
     {
       description: "Refresh Docker image digest/update metadata using Unraid's native manager.",
       inputSchema: {},
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         idempotentHint: true,
         openWorldHint: true,
@@ -529,6 +543,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
     {
       description: "Sync Unraid Docker template path mappings.",
       inputSchema: {},
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         idempotentHint: true,
         openWorldHint: true,
@@ -573,6 +588,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
           .min(1),
         persistUserPreferences: z.boolean().default(true),
       },
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         destructiveHint: false,
         idempotentHint: true,
@@ -636,6 +652,7 @@ function registerPluginTools(server: McpServer, options: BuildServerOptions) {
       inputSchema: {
         limit: LimitSchema.describe("Maximum plugins to return per plugin section."),
       },
+      outputSchema: JsonResultOutputSchema,
       annotations: {
         readOnlyHint: true,
         openWorldHint: true,
