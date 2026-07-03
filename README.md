@@ -99,6 +99,7 @@ npm run typecheck
 npm run lint
 npm run test
 npm run check
+npm run build
 ```
 
 Install the tracked local Git hooks once per clone so pushes run checks before GitHub Actions spends minutes:
@@ -108,6 +109,14 @@ npm run hooks:install
 ```
 
 The pre-push hook runs `npm run check && npm run build`.
+
+For an MCP Inspector smoke test against stdio after building:
+
+```bash
+npx @modelcontextprotocol/inspector node dist/index.js
+```
+
+See [docs/mcp-quality-checklist.md](docs/mcp-quality-checklist.md) for the MCP design checklist and evaluation gaps we track.
 
 ## Container Images
 

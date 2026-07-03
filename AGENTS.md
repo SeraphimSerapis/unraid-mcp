@@ -20,6 +20,7 @@ This repository is an MCP server for Unraid's official GraphQL API. Treat it lik
 - Add focused Vitest coverage for new tool behavior, capability detection, and GraphQL error handling.
 - Prefer small modules with explicit inputs over broad global state.
 - Keep tool responses both human-readable and structured when practical.
+- Add `outputSchema` for stable structured tool results where it will not misrepresent error or dry-run responses.
 - Do not add large dependency trees for simple helpers.
 
 ## Git Workflow
@@ -33,3 +34,4 @@ This repository is an MCP server for Unraid's official GraphQL API. Treat it lik
 - Update `README.md` for user-facing behavior changes.
 - Update `.env.example` when adding configuration.
 - Document any Unraid API limitation honestly rather than implying support that is not present in the schema.
+- Track MCP design and evaluation practices in `docs/mcp-quality-checklist.md` when adopting or intentionally deviating from common MCP builder guidance.
