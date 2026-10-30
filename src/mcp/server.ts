@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 
@@ -91,13 +93,21 @@ export function buildMcpServer(
   return server;
 }
 
+// Read at runtime so serverInfo tracks releases. package.json sits two levels above both
+// src/mcp/ and dist/mcp/, and the Docker image copies it next to dist/.
+const packageJson = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+) as { version: string };
+
+export const SERVER_INFO = {
+  name: "unraid-mcp",
+  version: packageJson.version,
+  websiteUrl: "https://github.com/SeraphimSerapis/unraid-mcp",
+};
+
 function defaultMcpServer() {
   return new McpServer(
-    {
-      name: "unraid-mcp",
-      version: "0.1.0",
-      websiteUrl: "https://github.com/tim/unraid-mcp",
-    },
+    { ...SERVER_INFO },
     {
       capabilities: {
         logging: {},

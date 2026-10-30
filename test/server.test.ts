@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { buildMcpServer, resolveContainerIdByName } from "../src/mcp/server.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CapabilityService } from "../src/graphql/capabilities.js";
 import type { UnraidClient } from "../src/graphql/client.js";
@@ -102,6 +106,36 @@ function buildTestServer(options: {
 function textOf(result: Awaited<ReturnType<ToolHandler>>) {
   return result.content.find((item) => item.type === "text")?.text ?? "";
 }
+
+describe("server info", () => {
+  it("advertises the package.json version and repository URL on initialize", async () => {
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+    const server = buildMcpServer({
+      allowRawGraphql: false,
+      capabilities: {} as CapabilityService,
+      client: {} as UnraidClient,
+      enableMutations: false,
+      mutationTimeoutMs: 300_000,
+      pluginHostAllowlist: [],
+    });
+    const client = new Client({ name: "server-info-test", version: "0.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    expect(client.getServerVersion()).toMatchObject({
+      name: "unraid-mcp",
+      version: packageJson.version,
+      websiteUrl: "https://github.com/SeraphimSerapis/unraid-mcp",
+    });
+
+    await client.close();
+    await server.close();
+  });
+});
 
 describe("resolveContainerIdByName", () => {
   it("matches a name with the Docker-style leading slash", () => {
