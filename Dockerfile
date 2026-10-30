@@ -1,4 +1,4 @@
-FROM node:22.23.4-alpine AS deps
+FROM node:26.12.1-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -10,7 +10,7 @@ COPY src ./src
 RUN npm run build
 RUN npm prune --omit=dev
 
-FROM node:22.23.4-alpine AS runtime
+FROM node:26.12.1-alpine AS runtime
 ENV MCP_TRANSPORT=http \
     MCP_HTTP_HOST=0.0.0.0 \
     MCP_HTTP_PORT=3000 \
