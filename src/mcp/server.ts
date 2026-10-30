@@ -413,10 +413,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
       inputSchema: {
         confirm: z.boolean().default(false).describe("Must be true to perform the update."),
         dryRun: z.boolean().default(true).describe("When true, only report the intended action."),
-        id: z
-          .string()
-          .optional()
-          .describe("Container PrefixedID from unraid_list_containers."),
+        id: z.string().optional().describe("Container PrefixedID from unraid_list_containers."),
         name: z
           .string()
           .optional()
@@ -472,11 +469,7 @@ function registerDockerTools(server: McpServer, options: BuildServerOptions) {
         { id: resolvedId },
         { timeoutMs: options.mutationTimeoutMs },
       );
-      return jsonResult(
-        "Unraid Docker update started",
-        data,
-        `update requested for ${resolvedId}`,
-      );
+      return jsonResult("Unraid Docker update started", data, `update requested for ${resolvedId}`);
     },
   );
 
