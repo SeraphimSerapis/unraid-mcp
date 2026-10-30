@@ -34,7 +34,11 @@ function buildTestServer(options: {
   responses?: StubbedResponse[];
 }) {
   const { handlers, fakeServer } = captureHandlers();
-  const calls: Array<{ query: string; variables?: unknown; options?: { timeoutMs?: number } | undefined }> = [];
+  const calls: Array<{
+    query: string;
+    variables?: unknown;
+    options?: { timeoutMs?: number } | undefined;
+  }> = [];
   const responses = options.responses ?? [];
 
   const client = {
@@ -102,28 +106,19 @@ function textOf(result: Awaited<ReturnType<ToolHandler>>) {
 describe("resolveContainerIdByName", () => {
   it("matches a name with the Docker-style leading slash", () => {
     expect(
-      resolveContainerIdByName(
-        [{ id: "container-abc123", names: ["/webdav"] }],
-        "webdav",
-      ),
+      resolveContainerIdByName([{ id: "container-abc123", names: ["/webdav"] }], "webdav"),
     ).toBe("container-abc123");
   });
 
   it("matches a name passed with the leading slash", () => {
     expect(
-      resolveContainerIdByName(
-        [{ id: "container-abc123", names: ["/webdav"] }],
-        "/webdav",
-      ),
+      resolveContainerIdByName([{ id: "container-abc123", names: ["/webdav"] }], "/webdav"),
     ).toBe("container-abc123");
   });
 
   it("matches case-insensitively", () => {
     expect(
-      resolveContainerIdByName(
-        [{ id: "container-abc123", names: ["/SearXNG"] }],
-        "searxng",
-      ),
+      resolveContainerIdByName([{ id: "container-abc123", names: ["/SearXNG"] }], "searxng"),
     ).toBe("container-abc123");
   });
 
