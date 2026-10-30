@@ -1,6 +1,18 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
+  "extends": ["config:recommended", ":dependencyDashboard", "group:allNonMajor"],
+  "labels": ["dependencies", "renovate"],
+  "packageRules": [
+    {
+      "description": "Cool down Docker image releases; GHCR often lacks timestamps, so treat a missing age as optional.",
+      "matchDatasources": ["docker"],
+      "minimumReleaseAge": "3 days",
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
+    {
+      "description": "Major updates never automerge.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
   ]
 }
