@@ -10,9 +10,10 @@
       "minimumReleaseAgeBehaviour": "timestamp-optional"
     },
     {
-      "description": "Major updates never automerge.",
+      "description": "Major updates wait for approval on the Dependency Dashboard and never automerge.",
       "matchUpdateTypes": ["major"],
-      "automerge": false
+      "automerge": false,
+      "dependencyDashboardApproval": true
     }
   ]
 }
