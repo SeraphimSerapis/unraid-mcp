@@ -20,7 +20,7 @@ The server is intentionally capability-aware: it inspects the GraphQL schema, ke
 
 - Unraid 7.2+ with the built-in API, or an older supported Unraid release with the Unraid Connect/API plugin installed.
 - A least-privilege Unraid API key.
-- Node.js 22+ for local development, or Docker for deployment.
+- Node.js 26+ for local development, or Docker for deployment.
 
 The Unraid docs state that the API is built into Unraid 7.2+, uses GraphQL, and supports API keys via the `x-api-key` header. See [Unraid API docs](https://docs.unraid.net/API/) and [Using the Unraid API](https://docs.unraid.net/API/how-to-use-the-api/).
 
