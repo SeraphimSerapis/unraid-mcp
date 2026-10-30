@@ -111,8 +111,8 @@ describe("UnraidClient", () => {
       requestTimeoutMs: 10_000,
     });
 
-    await expect(
-      client.query("query { online }", undefined, { timeoutMs: 1 }),
-    ).rejects.toThrow(/aborted/i);
+    await expect(client.query("query { online }", undefined, { timeoutMs: 1 })).rejects.toThrow(
+      /aborted/i,
+    );
   });
 });
