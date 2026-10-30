@@ -4,7 +4,6 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { config as loadDotenv } from "dotenv";
 import type { Request, Response } from "express";
 
@@ -191,7 +190,7 @@ function serveHttp() {
           }
         };
 
-        await server.connect(transport as unknown as Transport);
+        await server.connect(transport);
       }
 
       if (!transport) {
