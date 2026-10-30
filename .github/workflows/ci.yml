@@ -1,10 +1,15 @@
 name: CI
 
+# The weekly run rebuilds main with fresh base images, so security fixes ship
+# without a code change. `latest` still tracks releases (v* tags).
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  schedule:
+    - cron: "23 2 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -45,7 +50,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # YYYY.MDD.<run>: a calendar version Renovate can sort. MDD has no
+          # leading zero (Jan 5 is 105), which keeps it a valid number.
           tags: |
+            type=raw,value={{date 'YYYY.MDD' tz='Europe/Berlin'}}.${{ github.run_number }},enable={{is_default_branch}}
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
@@ -61,6 +69,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          pull: true
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -124,7 +124,7 @@ See [docs/mcp-quality-checklist.md](docs/mcp-quality-checklist.md) for the MCP d
 
 ## Container Images
 
-GitHub Actions builds Docker images for pull requests and publishes to GHCR on pushes to `main` and tags matching `v*`.
+GitHub Actions builds Docker images for pull requests and publishes to GHCR on pushes to `main` and tags matching `v*`. A weekly scheduled run rebuilds `main` so base image fixes ship without a code change.
 
 Published image:
 
@@ -135,8 +135,9 @@ ghcr.io/seraphimserapis/unraid-mcp
 Tagging policy:
 
 - `main` for pushes to the default branch
+- `YYYY.MDD.<run>` calendar versions (for example `2026.1030.42`) for default-branch builds, including the weekly rebuild
 - `pr-<number>` for pull request build validation, not pushed
-- `1.2.3`, `1.2`, and `1` for Git release tags like `v1.2.3`
+- `1.2.3`, `1.2`, `1`, and `latest` for Git release tags like `v1.2.3`
 - `sha-<commit>` for immutable commit references
 
 ## Known API Boundaries
